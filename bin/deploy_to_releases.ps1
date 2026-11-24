@@ -242,7 +242,8 @@ foreach ($archName in $archs) {
                 (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX7'),
                 (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX8'),
                 (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX9\32-bit'),
-                (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX10-11\32-bit')
+                (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX10-11\32-bit'),
+                (Join-Path $repoRoot 'releases\wiz3D\OpenGL-Quad-Buffer-Stereo\32-bit')
             )
             foreach ($leaf in $zondisionLeaves) {
                 if (-not (Test-Path $leaf)) { continue }
@@ -258,7 +259,8 @@ foreach ($archName in $archs) {
             $zondisionLeaves = @(
                 (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\Vulkan\64-bit'),
                 (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX9\64-bit'),
-                (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX10-11\64-bit')
+                (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX10-11\64-bit'),
+                (Join-Path $repoRoot 'releases\wiz3D\OpenGL-Quad-Buffer-Stereo\64-bit')
             )
             foreach ($leaf in $zondisionLeaves) {
                 if (-not (Test-Path $leaf)) { continue }

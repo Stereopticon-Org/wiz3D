@@ -42,6 +42,7 @@
 #define OGL_OUTPUT_SR_WEAVE            9
 #define OGL_OUTPUT_3DVISION_GLASSES    11  // NV3D-Lib DIRECT-mode shutter glasses; see NV3DGlassesOGL.{h,cpp}
 #define OGL_OUTPUT_KATANGA             12  // bo3b's shared-texture viewer; see KatangaOGL.{h,cpp}
+#define OGL_OUTPUT_ZONDISION           13  // Zondision glasses-free displays (Zimo M1); SBS on screen + ZimoAdapter.dll drives display 3D
 
 struct GlobalInfo
 {

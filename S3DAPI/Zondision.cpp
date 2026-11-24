@@ -107,7 +107,12 @@ bool ZondisionSelected()
 
 bool ZondisionTick()
 {
-    if (!ZondisionSelected()) return false;
+    return ZondisionTickEx((unsigned)gInfo.OutputMode, gInfo.Input.StereoActive != 0);
+}
+
+bool ZondisionTickEx(unsigned outputMode, bool stereoActive)
+{
+    if (outputMode != (unsigned)OUTMODE_ZONDISION) return false;
     ZondisionState& s = State();
     if (s.failed) return false;
 
@@ -157,14 +162,14 @@ bool ZondisionTick()
         s.ready = true;
     }
 
-    if (s.ready && !s.threeDOn && gInfo.Input.StereoActive)
+    if (s.ready && !s.threeDOn && stereoActive)
     {
         if (const int r = s.adapter.Set3D(1))
             ZLog("Zondision: Set3D(1) failed: %s\n", s.adapter.Describe(r));
         else
             s.threeDOn = true;
     }
-    else if (s.ready && s.threeDOn && !gInfo.Input.StereoActive)
+    else if (s.ready && s.threeDOn && !stereoActive)
     {
         s.adapter.Set3D(0);
         s.threeDOn = false;

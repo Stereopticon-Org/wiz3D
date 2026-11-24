@@ -15,6 +15,7 @@
 #include <boost/unordered_map.hpp>
 #include "Trace.h"
 #include "Renderer.h"
+#include "..\S3DAPI\Zondision.h"   // ZondisionTickEx (OGL has its own gInfo instance)
 #include <MinHook.h>
 
 static HMODULE g_hRealOpenGL32 = NULL;
@@ -94,6 +95,11 @@ BOOL WINAPI HwglSwapBuffers(HDC hdc)
 {
 	//gInfo.Trace = (gInfo.Debug && GetAsyncKeyState(VK_SCROLL) == 0x8001);
 	DEBUG_TRACE2("wglSwapBuffers\n");
+	// OGL has its own GlobalInfo instance (separate from S3DAPI's), so use the
+	// parameterised Zondision entry. OGL's GlobalInfo doesn't carry a global
+	// StereoActive -- stereo state is per-Renderer (m_bStereoRender). We pass
+	// true: picking OUTMODE_ZONDISION is itself the user's "3D on" intent.
+	::wiz3d::ZondisionTickEx((unsigned)gInfo.OutputMode, /*stereoActive*/true);
 	Renderer *pRenderer = GetRenderer(hdc);
 	if (pRenderer)
 		return pRenderer->SwapBuffers();

@@ -19,16 +19,18 @@
 
 namespace wiz3d {
 
-// Returns true when OUTMODE_ZONDISION is currently selected (cheap check).
-S3DAPI_API bool ZondisionSelected();
+// Parameterised core, used by wrappers that don't share S3DAPI's gInfo
+// (S3DWrapperOGL has its own GlobalInfo instance, same for NvDirectMode and
+// AmdQbProxy). Pass the wrapper's own outputMode + stereoActive values.
+// Lazy-init on first call (loads ZimoAdapter.dll, picks a Zondision-registered
+// display, starts a Game3DTransposer session in HARDWARE_WEAVING_SBS mode);
+// keeps Set3D in sync on subsequent calls. Returns true when the SDK session is
+// up and 3D-enabled.
+S3DAPI_API bool ZondisionTickEx(unsigned outputMode, bool stereoActive);
 
-// Once per present when ZondisionSelected() is true. Lazy-init on first call
-// (loads ZimoAdapter.dll, picks a Zondision-registered display, starts a
-// Game3DTransposer session in HARDWARE_WEAVING_SBS mode); keeps Set3D in sync
-// with gInfo.Input.StereoActive on subsequent calls. Returns true if the SDK
-// session is up and 3D-enabled (informational; callers should render Half-SBS
-// regardless, since fall-through still shows stereo on screen).
-S3DAPI_API bool ZondisionTick();
+// Convenience wrapper for callers that share S3DAPI's gInfo (DX7/8/9/10/11, VK).
+S3DAPI_API bool ZondisionSelected();   // reads gInfo.OutputMode
+S3DAPI_API bool ZondisionTick();       // reads gInfo.OutputMode + gInfo.Input.StereoActive
 
 // Called once from each wrapper's device-teardown path. Safe to call without
 // ZondisionTick() ever having run. Idempotent across wrappers in the same

@@ -256,6 +256,12 @@
     <ProjectReference Include="..\ZLOg\ZLOg.vcxproj">
       <Project>{c538d122-90db-4d2b-accb-d5b43eabc2cc}</Project>
     </ProjectReference>
+    <!-- S3DAPI.dll pulled in for wiz3d::ZondisionTickEx. OGL keeps its own gInfo
+         instance in S3DWrapperOGL.cpp; Zondision uses the parameterised entry
+         so there is no gInfo collision across DLLs. -->
+    <ProjectReference Include="..\S3DAPI\S3DAPI.vcxproj">
+      <Project>{1A6F9CD3-E915-4C1C-AC06-B87D7B21DE35}</Project>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -1359,7 +1359,8 @@ BOOL	Renderer::SwapBuffers()
 			 gInfo.OutputMode == OGL_OUTPUT_HALF_TB ||
 			 gInfo.OutputMode == OGL_OUTPUT_FULL_TB ||
 			 gInfo.OutputMode == OGL_OUTPUT_KATANGA ||          // Katanga publishes above; the on-screen fallback is SBS
-			 gInfo.OutputMode == OGL_OUTPUT_3DVISION_GLASSES)   // NV3D-Lib publishes above; same SBS fallback
+			 gInfo.OutputMode == OGL_OUTPUT_3DVISION_GLASSES || // NV3D-Lib publishes above; same SBS fallback
+			 gInfo.OutputMode == OGL_OUTPUT_ZONDISION)          // Zondision drives display 3D state; on-screen output is SBS
 	{
 		// Split-screen modes: left eye to one half of the back buffer, right
 		// eye to the other. Half-vs-Full is identical compositor geometry —
