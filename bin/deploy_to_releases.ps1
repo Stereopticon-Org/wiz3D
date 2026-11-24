@@ -227,16 +227,34 @@ foreach ($archName in $archs) {
     }
 
     # --- Zondision runtime spread: ZimoAdapter.dll + 3DS_SDK.dll + jsoncpp.dll
-    # into every Stereo-Injector x64 leaf. Each wrapper calls wiz3d::ZondisionTick()
-    # at present, which lazy-loads ZimoAdapter.dll from the wrapper's own folder.
-    # Absent when the SDK isn't on this build PC -- Zondision output just won't
-    # initialise at runtime, every other output mode is unaffected.
+    # into every Stereo-Injector leaf whose wrapper produces SBS. Each wrapper calls
+    # wiz3d::ZondisionTick() at present, which lazy-loads ZimoAdapter.dll from the
+    # wrapper's own folder. Absent when the SDK isn't on this build PC -- Zondision
+    # output just won't initialise at runtime, every other output mode is unaffected.
+    # DX7 and DX8 inherit via the DX9 translation shim; they get the DLLs so the
+    # LoadLibrary call lands even when the process is pure DX8 / DX7.
+    # OGL-QBS is skipped: quad-buffer-stereo passthrough, no SBS.
+    if ($archAlias -eq '32-bit') {
+        $zimoBin = Join-Path $repoRoot 'ZimoAdapter\bin\Release\Win32'
+        $zimoSdk = Join-Path $repoRoot 'lib\Zondision\3DS_CSDK_V5.0.4.5\libs\release\x86'
+        if ((Test-Path (Join-Path $zimoBin 'ZimoAdapter.dll')) -and (Test-Path (Join-Path $zimoSdk '3DS_SDK.dll'))) {
+            $zondisionLeaves = @(
+                (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX7'),
+                (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX8'),
+                (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX9\32-bit'),
+                (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX10-11\32-bit')
+            )
+            foreach ($leaf in $zondisionLeaves) {
+                if (-not (Test-Path $leaf)) { continue }
+                Copy-Files -SrcDir $zimoBin -DstDir $leaf -Files @('ZimoAdapter.dll') -Tag "$(Split-Path $leaf -Leaf): ZimoAdapter"
+                Copy-Files -SrcDir $zimoSdk -DstDir $leaf -Files @('3DS_SDK.dll', 'jsoncpp.dll') -Tag "$(Split-Path $leaf -Leaf): Zondision SDK"
+            }
+        }
+    }
     if ($archAlias -eq '64-bit') {
         $zimoBin = Join-Path $repoRoot 'ZimoAdapter\bin\Release\x64'
         $zimoSdk = Join-Path $repoRoot 'lib\Zondision\3DS_CSDK_V5.0.4.5\libs\release\x64'
         if ((Test-Path (Join-Path $zimoBin 'ZimoAdapter.dll')) -and (Test-Path (Join-Path $zimoSdk '3DS_SDK.dll'))) {
-            # OGL-QBS is skipped: it's a pure quad-buffer-stereo passthrough, doesn't produce
-            # SBS output, so Zondision's SBS-weaving assumption doesn't apply there.
             $zondisionLeaves = @(
                 (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\Vulkan\64-bit'),
                 (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX9\64-bit'),

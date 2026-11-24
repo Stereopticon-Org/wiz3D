@@ -103,15 +103,19 @@ if (-not $SkipBuild) {
     # present on the build PC (SDK itself is never committed -- lib/ is gitignored).
     $zimoAdapter = Join-Path $repoRoot 'ZimoAdapter\ZimoAdapter.vcxproj'
     $zondisionSdkInc = Join-Path $repoRoot 'lib\Zondision\3DS_CSDK_V5.0.4.5\inc\3DS_SDK.h'
-    if ($archs -contains 'x64' -and (Test-Path $zimoAdapter) -and (Test-Path $zondisionSdkInc)) {
-        Write-Host ""
-        Write-Host "=== Building ZimoAdapter.vcxproj  Release|x64 (side-build) ===" -ForegroundColor Cyan
-        & $msbuild $zimoAdapter /p:Configuration=Release /p:Platform=x64 /m /nologo /verbosity:minimal
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "  (ZimoAdapter msbuild exit $LASTEXITCODE - Zondision output may be missing from the Vulkan deploy)" -ForegroundColor Yellow
+    if ((Test-Path $zimoAdapter) -and (Test-Path $zondisionSdkInc)) {
+        foreach ($p in @(@{Plat='Win32'; Alias='32-bit'}, @{Plat='x64'; Alias='64-bit'})) {
+            $vsPlat = $p.Plat
+            if (-not ($archs -contains $vsPlat)) { continue }
+            Write-Host ""
+            Write-Host "=== Building ZimoAdapter.vcxproj  Release|$vsPlat (side-build) ===" -ForegroundColor Cyan
+            & $msbuild $zimoAdapter /p:Configuration=Release /p:Platform=$vsPlat /m /nologo /verbosity:minimal
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "  (ZimoAdapter $vsPlat msbuild exit $LASTEXITCODE - Zondision output may be missing from the $($p.Alias) deploys)" -ForegroundColor Yellow
+            }
         }
     }
-    elseif ($archs -contains 'x64' -and (Test-Path $zimoAdapter)) {
+    elseif (Test-Path $zimoAdapter) {
         Write-Host ""
         Write-Host "  (skipping ZimoAdapter.vcxproj: Zondision SDK headers not on this build PC)" -ForegroundColor DarkGray
     }
