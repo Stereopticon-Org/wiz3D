@@ -1034,6 +1034,15 @@ void ScreenshotCopy(DeviceData* d, VkCommandBuffer cb, VkImage left, VkImage rig
 void ScreenshotWrite(DeviceData* d, VkQueue queue);   // after the submit holding the copies
 void ScreenshotDestroy(DeviceData* d);
 
+// Zondision glasses-free display output (ZondisionVK.cpp). Loads ZimoAdapter.dll at
+// runtime; the Zondision display weaves the Half-SBS image we feed through the normal
+// composite path. ZondisionBegin() is called at the start of every present that selects
+// OUTMODE_ZONDISION, to lazy-init the SDK session and keep the 3D-on state in sync with
+// gInfo.Input.StereoActive. ZondisionShutdown() runs on vkDestroyDevice.
+bool ZondisionSelected();
+bool ZondisionBegin();
+void ZondisionShutdown();
+
 // SR weave through a private D3D11 device and shared textures (Weave.cpp).
 // Lock held for all of these.
 bool WeaveSelected();

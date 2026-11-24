@@ -96,6 +96,25 @@ if (-not $SkipBuild) {
             Write-Host "  (S3DWrapperD3D12 msbuild exit $LASTEXITCODE - DX12 stereo wrapper may be missing from the hd3d/dx12 deploy)" -ForegroundColor Yellow
         }
     }
+
+    # ZimoAdapter.dll is a thin wrapper around the Zondision 3DS SDK, loaded at
+    # runtime by the Vulkan layer (and, in a future cycle, the DX wrappers) when
+    # the user picks OUTMODE_ZONDISION. Side-built only when the SDK headers are
+    # present on the build PC (SDK itself is never committed -- lib/ is gitignored).
+    $zimoAdapter = Join-Path $repoRoot 'ZimoAdapter\ZimoAdapter.vcxproj'
+    $zondisionSdkInc = Join-Path $repoRoot 'lib\Zondision\3DS_CSDK_V5.0.4.5\inc\3DS_SDK.h'
+    if ($archs -contains 'x64' -and (Test-Path $zimoAdapter) -and (Test-Path $zondisionSdkInc)) {
+        Write-Host ""
+        Write-Host "=== Building ZimoAdapter.vcxproj  Release|x64 (side-build) ===" -ForegroundColor Cyan
+        & $msbuild $zimoAdapter /p:Configuration=Release /p:Platform=x64 /m /nologo /verbosity:minimal
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  (ZimoAdapter msbuild exit $LASTEXITCODE - Zondision output may be missing from the Vulkan deploy)" -ForegroundColor Yellow
+        }
+    }
+    elseif ($archs -contains 'x64' -and (Test-Path $zimoAdapter)) {
+        Write-Host ""
+        Write-Host "  (skipping ZimoAdapter.vcxproj: Zondision SDK headers not on this build PC)" -ForegroundColor DarkGray
+    }
 }
 
 Write-Host ""

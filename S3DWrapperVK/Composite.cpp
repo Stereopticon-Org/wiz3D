@@ -255,6 +255,9 @@ void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std:
 {
     outWait.clear();
     if (!d->stereoEnabled) return;
+    // Zondision drives the display's own 3D state through its SDK; the on-screen image
+    // stays Half-SBS and the display weaves it. Begin runs lazy init + Set3D on/off.
+    if (ZondisionSelected()) ZondisionBegin();
     uint32_t family = 0;
     std::lock_guard<std::shared_mutex> g(d->lock);
     {

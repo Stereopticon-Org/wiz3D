@@ -213,7 +213,9 @@ foreach ($archName in $archs) {
     # loader at this folder. Hosts that reject or bypass a local vulkan-1.dll
     # (RPCS3, KytyPS5) use the same folder without the proxy, through
     # VK_ADD_LAYER_PATH + VK_LOADER_LAYERS_ENABLE (see wiki/API-Vulkan.md).
-    # No OutputMethods folder: side-by-side and the SR weave are built in.
+    # No OutputMethods folder: side-by-side, compute composite and SR weave
+    # are built in. Zondision output rides along as three DLLs (ZimoAdapter
+    # + Zondision's own 3DS_SDK + jsoncpp) when the SDK was on the build PC.
     if ($archAlias -eq '64-bit') {
         $dst = Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\Vulkan\64-bit'
         Copy-Files -SrcDir $binDir   -DstDir $dst                                          `
@@ -222,6 +224,16 @@ foreach ($archName in $archs) {
         Copy-Files -SrcDir $proxyBinDir -DstDir $dst                                       `
                    -Files @('vulkan-1.dll')                                                `
                    -Tag   'Vulkan/64-bit proxy'
+        # Zondision output runtime: ZimoAdapter.dll (wiz3D's wrapper) + the Zondision SDK
+        # DLLs it dynamically loads. The SDK is never committed; copied from lib/ at
+        # build time. Absent when the SDK isn't on this build PC -- Zondision output just
+        # won't initialise at runtime, every other output mode is unaffected.
+        $zimoBin  = Join-Path $repoRoot 'ZimoAdapter\bin\Release\x64'
+        $zimoSdk  = Join-Path $repoRoot 'lib\Zondision\3DS_CSDK_V5.0.4.5\libs\release\x64'
+        if ((Test-Path (Join-Path $zimoBin 'ZimoAdapter.dll')) -and (Test-Path (Join-Path $zimoSdk '3DS_SDK.dll'))) {
+            Copy-Files -SrcDir $zimoBin -DstDir $dst -Files @('ZimoAdapter.dll') -Tag 'Vulkan/64-bit ZimoAdapter'
+            Copy-Files -SrcDir $zimoSdk -DstDir $dst -Files @('3DS_SDK.dll', 'jsoncpp.dll') -Tag 'Vulkan/64-bit Zondision SDK'
+        }
     }
 
     # --- opengl quad-buffer stereo (both archs) ---

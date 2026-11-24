@@ -414,3 +414,8 @@ lib/**
 # Linux build (build-linux.sh)
 /build-linux-obj/
 /out/
+
+# Zondision app-key private header: never committed. See ZimoAdapter.cpp.
+/ZimoAdapter/ZimoKey.private.h
+/ZimoAdapter/bin/
+/ZimoAdapter/obj/
