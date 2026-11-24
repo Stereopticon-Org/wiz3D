@@ -107,7 +107,6 @@
     <ClCompile Include="FrameGenVK.cpp" />
     <ClCompile Include="Composite.cpp" />
     <ClCompile Include="CompositeCompute.cpp" />
-    <ClCompile Include="ZondisionVK.cpp" />
     <ClCompile Include="OSDRendererVK.cpp" />
     <ClCompile Include="ScreenshotVK.cpp" />
     <ClCompile Include="ProfileVK.cpp" />

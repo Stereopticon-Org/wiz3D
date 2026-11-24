@@ -3,44 +3,58 @@
 * Copyright (C) wiz3D contributors 2026
 */
 
-// Zondision (Zimo M1 glasses-free display) output path for the Vulkan layer.
+// Shared Zondision output rail. See Zondision.h.
 //
-// Architecture mirrors the SR weave rail: Zondision's SDK does the per-pixel
-// weave on the display itself when fed a Half-SBS image and told "3D on". We
-// produce the Half-SBS via CompositeCompute (mode 1 in the compute shader) and
-// drive the display state through ZimoAdapter.dll -- a tiny LGPL wrapper around
-// 3DS_SDK.dll that holds the Zondision app key in XOR-scrambled form (built
-// alongside wiz3D in ZimoAdapter/).
-//
-// Lifecycle:
-//   - On first OUTMODE_ZONDISION present we LoadLibrary("ZimoAdapter.dll"), list
-//     displays, pick the Zondision-registered one (or the SDK's preferred id),
-//     and call Zimo_Start(id, ZIMO_SBS); Zimo_Set3D(On).
-//   - If any step fails the path is marked failed and we fall through to the
-//     normal Half-SBS present on the screen (so the user sees stereo, not black).
-//   - On vkDestroyDevice we Zimo_Set3D(Off) + Zimo_Stop and FreeLibrary.
+// The Zondision display's own driver weaves the on-screen image through the
+// 3DS SDK (ZimoAdapter.dll -> 3DS_SDK.dll). wiz3D just produces a normal
+// Half-SBS screen output and tells the SDK "3D on"; the SDK's weaving does
+// the rest. If any step of the SDK path fails (DLL missing, no Zondision
+// display, Start failed), the user still sees stereo on screen -- the output
+// just isn't woven on the Zondision display.
 
-#include "Layer.h"
-#include "../S3DAPI/GlobalData.h"
+#include "stdafx.h"
+#include "Zondision.h"
+#include "GlobalData.h"
 #include "../Shared/OutputModeNames.h"
 #include "../ZimoAdapter/ZimoAdapter.h"
 
-namespace wiz3d { namespace vk {
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <cstdio>
+
+namespace {
+// S3DAPI-local logger: OutputDebugStringA is universally available and lands in DbgView,
+// VS Output window, and attached-debugger consoles. Avoids pulling in each wrapper's own
+// Log* macro (DEBUG_MESSAGE, DDILog, etc. vary by project).
+void ZLog(const char* fmt, ...)
+{
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnprintf_s(buf, _countof(buf), _TRUNCATE, fmt, ap);
+    va_end(ap);
+    OutputDebugStringA(buf);
+}
+} // namespace
+
+namespace wiz3d {
 
 namespace {
 
 struct ZondisionAdapter
 {
-    HMODULE               dll = nullptr;
-    Zimo_ApiVersionFn     ApiVersion = nullptr;
-    Zimo_LoadFn           Load = nullptr;
-    Zimo_ListDisplaysFn   ListDisplays = nullptr;
-    Zimo_StartFn          Start = nullptr;
-    Zimo_Set3DFn          Set3D = nullptr;
-    Zimo_SetModeFn        SetMode = nullptr;
-    Zimo_StopFn           Stop = nullptr;
-    Zimo_PreferredDisplayFn PreferredDisplay = nullptr;
-    Zimo_DescribeFn       Describe = nullptr;
+    HMODULE                    dll = nullptr;
+    Zimo_ApiVersionFn          ApiVersion = nullptr;
+    Zimo_LoadFn                Load = nullptr;
+    Zimo_ListDisplaysFn        ListDisplays = nullptr;
+    Zimo_StartFn               Start = nullptr;
+    Zimo_Set3DFn               Set3D = nullptr;
+    Zimo_SetModeFn             SetMode = nullptr;
+    Zimo_StopFn                Stop = nullptr;
+    Zimo_PreferredDisplayFn    PreferredDisplay = nullptr;
+    Zimo_DescribeFn            Describe = nullptr;
 };
 
 bool LoadAdapter(ZondisionAdapter& a)
@@ -71,16 +85,13 @@ bool LoadAdapter(ZondisionAdapter& a)
 struct ZondisionState
 {
     ZondisionAdapter adapter;
-    bool             tried   = false;   // Init attempted (success or fail)
-    bool             ready   = false;   // Session started and 3D on
-    bool             failed  = false;   // permanent fail: fall through to Half-SBS on screen
-    int              displayId = 0;     // picked Zondision display, 0 = SDK's choice
-    bool             threeDOn = false;  // last Set3D state (so we only call on change)
+    bool             tried    = false;   // Init attempted (success or fail)
+    bool             ready    = false;   // Session started
+    bool             failed   = false;   // permanent fail: fall through to Half-SBS on screen
+    int              displayId = 0;      // picked Zondision display
+    bool             threeDOn = false;   // last Set3D state
 };
 
-// Per-device singleton. Could live on DeviceData like OsdState / CompositeComputeState,
-// but Zondision is single-session anyway (the SDK rejects a second Start). Simpler to
-// scope here.
 ZondisionState& State()
 {
     static ZondisionState s;
@@ -89,12 +100,14 @@ ZondisionState& State()
 
 } // namespace
 
-// Called the first present each frame that selects OUTMODE_ZONDISION. Returns true when
-// the compute rail should produce Half-SBS output AND the Zondision 3D mode is on;
-// false means fall through to the normal Half-SBS screen present (3D not available).
-bool ZondisionBegin()
+bool ZondisionSelected()
 {
-    if (gInfo.OutputMode != (DWORD)OUTMODE_ZONDISION) return false;
+    return gInfo.OutputMode == (DWORD)OUTMODE_ZONDISION;
+}
+
+bool ZondisionTick()
+{
+    if (!ZondisionSelected()) return false;
     ZondisionState& s = State();
     if (s.failed) return false;
 
@@ -103,13 +116,13 @@ bool ZondisionBegin()
         s.tried = true;
         if (!LoadAdapter(s.adapter))
         {
-            Log("Zondision: ZimoAdapter.dll missing or wrong API version; Zondision output unavailable\n");
+            ZLog("Zondision: ZimoAdapter.dll missing or wrong API version; Zondision output unavailable\n");
             s.failed = true;
             return false;
         }
         if (const int r = s.adapter.Load())
         {
-            Log("Zondision: 3DS_SDK.dll load failed (%s)\n", s.adapter.Describe(r));
+            ZLog("Zondision: 3DS_SDK.dll load failed (%s)\n", s.adapter.Describe(r));
             s.failed = true;
             return false;
         }
@@ -119,13 +132,13 @@ bool ZondisionBegin()
         const int pref = s.adapter.PreferredDisplay ? s.adapter.PreferredDisplay() : 0;
         for (int i = 0; i < n; ++i)
         {
-            if (!displays[i].zondision) continue;              // Leia SR displays live on the SR Weave rail
+            if (!displays[i].zondision) continue;              // Leia SR displays live on SR Weave rail
             if (pref && displays[i].id == pref) { picked = displays[i].id; break; }
             if (!picked) picked = displays[i].id;              // first zondision-registered display
         }
         if (!picked)
         {
-            Log("Zondision: no Zondision-registered display found (SDK listed %d displays)\n", n);
+            ZLog("Zondision: no Zondision-registered display found (SDK listed %d displays)\n", n);
             s.failed = true;
             return false;
         }
@@ -135,11 +148,11 @@ bool ZondisionBegin()
         const int r = s.adapter.Start(picked, ZIMO_SBS, &features, sdkVer, (int)sizeof(sdkVer));
         if (r != 0)
         {
-            Log("Zondision: Start(display=%d) failed: %s\n", picked, s.adapter.Describe(r));
+            ZLog("Zondision: Start(display=%d) failed: %s\n", picked, s.adapter.Describe(r));
             s.failed = true;
             return false;
         }
-        Log("Zondision: session started on display %d (SDK %s, platformFeatures=%d)\n",
+        ZLog("Zondision: session started on display %d (SDK %s, platformFeatures=%d)\n",
             picked, sdkVer, features);
         s.ready = true;
     }
@@ -147,7 +160,7 @@ bool ZondisionBegin()
     if (s.ready && !s.threeDOn && gInfo.Input.StereoActive)
     {
         if (const int r = s.adapter.Set3D(1))
-            Log("Zondision: Set3D(1) failed: %s\n", s.adapter.Describe(r));
+            ZLog("Zondision: Set3D(1) failed: %s\n", s.adapter.Describe(r));
         else
             s.threeDOn = true;
     }
@@ -159,11 +172,6 @@ bool ZondisionBegin()
     return s.ready;
 }
 
-bool ZondisionSelected()
-{
-    return gInfo.OutputMode == (DWORD)OUTMODE_ZONDISION;
-}
-
 void ZondisionShutdown()
 {
     ZondisionState& s = State();
@@ -172,4 +180,4 @@ void ZondisionShutdown()
     s = ZondisionState{};
 }
 
-}} // namespace wiz3d::vk
+} // namespace wiz3d

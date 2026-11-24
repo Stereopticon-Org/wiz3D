@@ -11,6 +11,7 @@
 #include "../S3DAPI/GlobalData.h"
 #include "../S3DAPI/ReadData.h"
 #include "../S3DAPI/KeyboardHook.h"
+#include "../S3DAPI/Zondision.h"
 #include "../Shared/OutputModeNames.h"
 #include <string.h>
 #include <algorithm>
@@ -654,7 +655,7 @@ static VKAPI_ATTR void VKAPI_CALL Hook_DestroyDevice(VkDevice device, const VkAl
     }
     d->DestroyDevice(device, pAllocator);
     Log("  device destroyed\n");
-    ZondisionShutdown();
+    ::wiz3d::ZondisionShutdown();
     {
         std::lock_guard<std::mutex> g(s_lock);
         s_devices.erase(DispatchKey(device));

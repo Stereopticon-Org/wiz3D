@@ -10,6 +10,7 @@
 #include "..\S3DAPI\ReadData.h"      // WriteInputData — persist hotkey-tuned stereo
 #include "..\S3DAPI\KeyboardHook.h"  // gKbdHook — the DX9 paths' hotkey thread
 #include "..\S3DAPI\ConvertImages.h"  // GetBitWidthOfDXGIFormat
+#include "..\S3DAPI\Zondision.h"      // ZondisionTick / ZondisionShutdown (OUTMODE_ZONDISION)
 #include "Utils.h"                    // SaveImageToFile, screenshot extensions
 #include "ProductNames.h"
 #include "OSDRenderer.h"              // on-screen display overlay
@@ -91,6 +92,7 @@ SwapChain11Proxy::~SwapChain11Proxy()
     // teardown, but the COM-wrap path never did, so tuning died with the run.
     WriteInputData(&gInfo.Input);
     gKbdHook.clear();
+    ::wiz3d::ZondisionShutdown();   // idempotent; no-op when the session wasn't started
     for (ID3D11Query*& q : m_frameEvents) if (q) { q->Release(); q = nullptr; }
     if (m_osd)   { delete m_osd;   m_osd   = nullptr; }
     if (m_laser) { delete m_laser; m_laser = nullptr; }
@@ -785,6 +787,10 @@ void SwapChain11Proxy::DoComposite()
     D3D11_PRIMITIVE_TOPOLOGY gameTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
     if (!gameState) ctx->IAGetPrimitiveTopology(&gameTopology);
     const OutputMode mode = SelectedOutputMode();
+    // Zondision glasses-free display: lazy-init ZimoAdapter.dll + 3DS SDK, keep
+    // Set3D in sync with StereoActive. The Zondision display weaves our Half-SBS
+    // screen output on its own; here we only drive the SDK lifecycle.
+    ::wiz3d::ZondisionTick();
     // Katanga: produce the wide-SBS composite and publish to the shared tex.
     // If Katanga isn't running / init fails, fall through to the compositor
     // below so the user still sees Half-SBS on their screen (sensible fallback).

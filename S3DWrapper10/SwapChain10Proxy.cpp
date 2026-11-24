@@ -7,6 +7,7 @@
 #include "proxy_factory.h"
 #include "AdapterFunctions.h"  // DDILog
 #include "..\Shared\OutputModeNames.h"   // OUTMODE_* constants shared across wrappers
+#include "..\S3DAPI\Zondision.h"         // ZondisionTick / ZondisionShutdown (OUTMODE_ZONDISION)
 #include <d3dcompiler.h>
 
 #pragma comment(lib, "dxguid.lib")
@@ -47,6 +48,7 @@ SwapChain10Proxy::SwapChain10Proxy(IDXGISwapChain* real, IDXGISwapChain1* real1,
 
 SwapChain10Proxy::~SwapChain10Proxy()
 {
+    ::wiz3d::ZondisionShutdown();   // idempotent; also safe if the DX11 SwapChain already tore the session down
     ReleaseStereoBackBuffer();
     ReleaseComposite();
     if (m_real1)  { m_real1->Release();  m_real1  = nullptr; }
@@ -451,6 +453,10 @@ HRESULT STDMETHODCALLTYPE SwapChain10Proxy::GetFullscreenState(BOOL* pFullscreen
 
 void SwapChain10Proxy::OnPresentBoundaryPre()
 {
+    // Zondision glasses-free display (Zimo M1 etc.) keeps its 3D state in sync with
+    // StereoActive each present. Fires regardless of UseCOMWrapReplay -- the DX10
+    // composite stays whatever it was, Zondision just adds a Set3D call out-of-band.
+    ::wiz3d::ZondisionTick();
     if (!gInfo.UseCOMWrapReplay) return;
     if (!m_parent) return;
     if (m_parent->IsPresentHookActive())

@@ -9,6 +9,7 @@
 #include "FamilyVK.h"
 #include "../S3DAPI/GlobalData.h"
 #include "../S3DAPI/KeyboardHook.h"
+#include "../S3DAPI/Zondision.h"
 
 namespace wiz3d { namespace vk {
 
@@ -256,8 +257,8 @@ void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std:
     outWait.clear();
     if (!d->stereoEnabled) return;
     // Zondision drives the display's own 3D state through its SDK; the on-screen image
-    // stays Half-SBS and the display weaves it. Begin runs lazy init + Set3D on/off.
-    if (ZondisionSelected()) ZondisionBegin();
+    // stays Half-SBS and the display weaves it. Tick runs lazy init + Set3D on/off.
+    ::wiz3d::ZondisionTick();
     uint32_t family = 0;
     std::lock_guard<std::shared_mutex> g(d->lock);
     {

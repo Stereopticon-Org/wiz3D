@@ -13,15 +13,17 @@
 #include "BaseStereoRenderer.h"
 #include "Trace.h"
 #include "CommandDumper.h"
+#include "..\S3DAPI\Zondision.h"   // ZondisionTick (OUTMODE_ZONDISION)
 
 #pragma optimize( "y", off ) // for Steam Community
 
-STDMETHODIMP CBaseStereoRenderer::Present( CONST RECT * pSourceRect, CONST RECT * pDestRect, HWND hDestWindowOverride, 
-										  CONST RGNDATA * pDirtyRegion ) 
+STDMETHODIMP CBaseStereoRenderer::Present( CONST RECT * pSourceRect, CONST RECT * pDestRect, HWND hDestWindowOverride,
+										  CONST RGNDATA * pDirtyRegion )
 {
 	DUMP_CMD(Present,pSourceRect,pDestRect,hDestWindowOverride,pDirtyRegion);
 
 	DEBUG_TRACE2(_T("%s\n"), _T( __FUNCTION__ ) );
+	::wiz3d::ZondisionTick();   // lazy-starts the Zondision 3D session when OUTMODE_ZONDISION is selected
 	return GetBaseSC()->Present(pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion, 0);
 }
 
@@ -31,6 +33,7 @@ STDMETHODIMP CBaseStereoRenderer::PresentEx(CONST RECT* pSourceRect,CONST RECT* 
 	DUMP_CMD(PresentEx,pSourceRect,pDestRect,hDestWindowOverride,pDirtyRegion,dwFlags);
 
 	DEBUG_TRACE2(_T("%s\n"), _T( __FUNCTION__ ) );
+	::wiz3d::ZondisionTick();
 	return GetBaseSC()->Present(pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion, dwFlags);
 }
 

@@ -224,15 +224,29 @@ foreach ($archName in $archs) {
         Copy-Files -SrcDir $proxyBinDir -DstDir $dst                                       `
                    -Files @('vulkan-1.dll')                                                `
                    -Tag   'Vulkan/64-bit proxy'
-        # Zondision output runtime: ZimoAdapter.dll (wiz3D's wrapper) + the Zondision SDK
-        # DLLs it dynamically loads. The SDK is never committed; copied from lib/ at
-        # build time. Absent when the SDK isn't on this build PC -- Zondision output just
-        # won't initialise at runtime, every other output mode is unaffected.
-        $zimoBin  = Join-Path $repoRoot 'ZimoAdapter\bin\Release\x64'
-        $zimoSdk  = Join-Path $repoRoot 'lib\Zondision\3DS_CSDK_V5.0.4.5\libs\release\x64'
+    }
+
+    # --- Zondision runtime spread: ZimoAdapter.dll + 3DS_SDK.dll + jsoncpp.dll
+    # into every Stereo-Injector x64 leaf. Each wrapper calls wiz3d::ZondisionTick()
+    # at present, which lazy-loads ZimoAdapter.dll from the wrapper's own folder.
+    # Absent when the SDK isn't on this build PC -- Zondision output just won't
+    # initialise at runtime, every other output mode is unaffected.
+    if ($archAlias -eq '64-bit') {
+        $zimoBin = Join-Path $repoRoot 'ZimoAdapter\bin\Release\x64'
+        $zimoSdk = Join-Path $repoRoot 'lib\Zondision\3DS_CSDK_V5.0.4.5\libs\release\x64'
         if ((Test-Path (Join-Path $zimoBin 'ZimoAdapter.dll')) -and (Test-Path (Join-Path $zimoSdk '3DS_SDK.dll'))) {
-            Copy-Files -SrcDir $zimoBin -DstDir $dst -Files @('ZimoAdapter.dll') -Tag 'Vulkan/64-bit ZimoAdapter'
-            Copy-Files -SrcDir $zimoSdk -DstDir $dst -Files @('3DS_SDK.dll', 'jsoncpp.dll') -Tag 'Vulkan/64-bit Zondision SDK'
+            # OGL-QBS is skipped: it's a pure quad-buffer-stereo passthrough, doesn't produce
+            # SBS output, so Zondision's SBS-weaving assumption doesn't apply there.
+            $zondisionLeaves = @(
+                (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\Vulkan\64-bit'),
+                (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX9\64-bit'),
+                (Join-Path $repoRoot 'releases\wiz3D\Stereo-Injector\DX10-11\64-bit')
+            )
+            foreach ($leaf in $zondisionLeaves) {
+                if (-not (Test-Path $leaf)) { continue }
+                Copy-Files -SrcDir $zimoBin -DstDir $leaf -Files @('ZimoAdapter.dll') -Tag "$(Split-Path $leaf -Leaf): ZimoAdapter"
+                Copy-Files -SrcDir $zimoSdk -DstDir $leaf -Files @('3DS_SDK.dll', 'jsoncpp.dll') -Tag "$(Split-Path $leaf -Leaf): Zondision SDK"
+            }
         }
     }
 
