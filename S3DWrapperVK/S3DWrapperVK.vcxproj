@@ -106,6 +106,7 @@
     <ClCompile Include="KytyTiles.cpp" />
     <ClCompile Include="FrameGenVK.cpp" />
     <ClCompile Include="Composite.cpp" />
+    <ClCompile Include="CompositeCompute.cpp" />
     <ClCompile Include="OSDRendererVK.cpp" />
     <ClCompile Include="ScreenshotVK.cpp" />
     <ClCompile Include="ProfileVK.cpp" />
@@ -129,8 +130,10 @@
     <None Include="VK_LAYER_wiz3D_stereo.json" />
     <None Include="osd.vert" />
     <None Include="osd.frag" />
+    <None Include="composite.comp" />
     <None Include="OsdVert.inc" />
     <None Include="OsdFrag.inc" />
+    <None Include="CompositeComp.inc" />
     <None Include="README.md" />
   </ItemGroup>
   <ItemGroup>

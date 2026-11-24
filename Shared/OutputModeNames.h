@@ -52,6 +52,10 @@ enum OutputModeId
     OUTMODE_KATANGA              = 12,  // 0.5.0: produces a shared wide-SBS DX11 texture Katanga picks
                                         //        up and displays. bo3b's open-source stereo viewer.
                                         //        See project_katanga_output memory for the protocol.
+    OUTMODE_ZONDISION            = 13,  // 0.4.4: Zondision glasses-free displays (Zimo M1 and later
+                                        //        via 3DS_SDK). The ZimoAdapter.dll wrapper hands the
+                                        //        two eye images to the SDK, which drives the display
+                                        //        over Named Pipe or Socket. See terms in lib/Zondision/.
 };
 
 struct OutputModeEntry
@@ -116,6 +120,13 @@ static const OutputModeEntry kOutputModeTable[] =
     // here is a last-resort fallback to SideBySideOutput if the shared-
     // handle creation fails (user still sees stereo on-screen as SBS).
     { OUTMODE_KATANGA,              "Katanga",                "SideBySideOutput",            0 },
+    // 0.4.4: Zondision output -- hands eye images to ZimoAdapter.dll, which
+    // calls into 3DS_SDK.dll (shipped alongside) to drive the Zondision display
+    // (Zimo M1 and later). No Output DLL load path on Vulkan; Vulkan has the
+    // adapter wired directly. DX wrappers get the adapter in a follow-up cycle.
+    // Fallback here is SideBySideOutput so DX configs that select Zondision
+    // on a non-Zondision system still see stereo on-screen as SBS.
+    { OUTMODE_ZONDISION,            "Zondision",              "SideBySideOutput",            0 },
     // --- Ultra-short bare-mode aliases (user convenience). "SBS" means
     //     HalfSBS, "TAB" means HalfTAB -- picking the common half variants.
     { OUTMODE_HALF_SIDE_BY_SIDE,    "SBS",                    "SideBySideOutput",            0 },
@@ -133,6 +144,8 @@ static const OutputModeEntry kOutputModeTable[] =
     { OUTMODE_IZ3D_DUAL,            "iZ3DDualPanel",          "S3DOutput",                   0 },
     { OUTMODE_3DVISION_GLASSES,     "3DVisionShutter",        "ShutterOutput",               0 },
     { OUTMODE_3DVISION_GLASSES,     "ShutterGlasses",         "ShutterOutput",               0 },
+    { OUTMODE_ZONDISION,            "ZondisionGlassesFree",   "SideBySideOutput",            0 },
+    { OUTMODE_ZONDISION,            "ZimoM1",                 "SideBySideOutput",            0 },
     // --- Pre-0.4.1 wrong-DLL aliases (recognise so users with stale configs
     //     still land on the right DLL + submode after a 0.4.3 upgrade). ---
     { OUTMODE_HALF_TOP_AND_BOTTOM,  "TopAndBottomOutput",     "SideBySideOutput",            1 },

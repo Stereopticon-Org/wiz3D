@@ -1,0 +1,32 @@
+#version 450
+// Stereo-composite kernel: one pipeline, mode picked by the push constant.
+// Session 1: scaffold only. The real per-mode logic (Half-SBS, Full-SBS, TAB,
+// Full-TAB, Checker, Anaglyph, RowIL, ColumnIL) lands in Session 2. Keep this
+// kernel's entry-point name, descriptor layout and push-constant block stable:
+// everything on the C++ side (CompositeCompute.cpp, Layer.h) binds against them.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform Params {
+    uint  mode;          // OUTMODE_* id
+    uint  swapEyes;      // 0 or 1
+    uint  stereoOn;      // 0 (left only) or 1 (full stereo)
+    int   edgeCropPx;    // Half-SBS crop, signed by convergence
+    float lastSep;       // sign picks the crop edge
+    uint  pad0;
+    uvec2 dstSize;       // destination extent in pixels
+} u;
+
+layout(set = 0, binding = 0) uniform sampler2D srcLeft;
+layout(set = 0, binding = 1) uniform sampler2D srcRight;
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D dst;
+
+void main()
+{
+    uvec2 px = gl_GlobalInvocationID.xy;
+    if (px.x >= u.dstSize.x || px.y >= u.dstSize.y) return;
+
+    // Scaffold: write transparent black. Session 2 replaces with a switch
+    // over u.mode covering every OUTMODE_* id the compute rail owns.
+    imageStore(dst, ivec2(px), vec4(0.0, 0.0, 0.0, 1.0));
+}

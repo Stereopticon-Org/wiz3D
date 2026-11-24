@@ -623,6 +623,7 @@ struct DeviceData
     // Storage buffers a compute dispatch writes and needs a sibling for (the gate refuses it until then); `lock`.
     std::vector<VkBuffer>      pendingBufferSiblings;
     struct OsdState*           osd = nullptr;         // the on-screen display (OSDRendererVK.cpp); `lock`
+    struct CompositeComputeState* compositeCompute = nullptr;   // compute composite (CompositeCompute.cpp); `lock`. Lazy-init on first dispatch.
 #define X(name) PFN_vk##name name = nullptr;
     WIZ3D_VK_DEVICE_FUNCS(X)
     WIZ3D_VK_OPTIONAL_DEVICE_FUNCS(X)
@@ -1004,6 +1005,16 @@ inline void StampCommandBuffers(DeviceData* d, VkCommandBuffer* cbs, uint32_t co
 
 void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std::vector<VkSemaphore>& outWait);
 void CompositeDestroy(DeviceData* d, SwapchainInfo& sc);
+
+// Unified compute-shader composite for every output mode on the compute rail
+// (Half-SBS, Full-SBS, TAB, Full-TAB, Checker, Anaglyph, RowIL, ColumnIL).
+// SR Weave / Zondision / 3D Vision stay on their own rails; this one is for
+// modes where wiz3D itself writes the final pixels. Lock held for all of these.
+// Session 1: scaffold only. The dispatch returns false, so the current fragment-
+// shader composite stays authoritative. Session 2 fills in the per-mode logic.
+bool CompositeComputeDispatch(DeviceData* d, VkCommandBuffer cb, VkImage dst, VkImage left, VkImage right,
+                              VkImageLayout dstLayout, uint32_t w, uint32_t h, uint32_t outputMode);
+void CompositeComputeDestroyDevice(DeviceData* d);
 
 // The DX9/DX11 on-screen display over the presented image (OSDRendererVK.cpp). Lock held for all of these.
 void OsdTick(DeviceData* d);                // once per present
