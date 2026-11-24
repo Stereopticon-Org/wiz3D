@@ -1,17 +1,31 @@
 #version 450
 // Stereo-composite kernel: one pipeline, mode picked by the push constant.
-// Session 1: scaffold only. The real per-mode logic (Half-SBS, Full-SBS, TAB,
-// Full-TAB, Checker, Anaglyph, RowIL, ColumnIL) lands in Session 2. Keep this
-// kernel's entry-point name, descriptor layout and push-constant block stable:
-// everything on the C++ side (CompositeCompute.cpp, Layer.h) binds against them.
+// Each work-item writes one output pixel.
+//
+// Modes handled here (the "compute rail", wiz3D writes final pixels):
+//   OUTMODE_HALF_SIDE_BY_SIDE   = 1   (sampled: each eye squashed to half width)
+//   OUTMODE_HALF_TOP_AND_BOTTOM = 3   (sampled: each eye squashed to half height)
+//   OUTMODE_ANAGLYPH            = 5   (per-texel: Dubois red/cyan)
+//   OUTMODE_ROW_INTERLEAVED     = 6   (per-texel: even rows L, odd rows R)
+//   OUTMODE_COLUMN_INTERLEAVED  = 7   (per-texel: even cols L, odd cols R)
+//   OUTMODE_CHECKERBOARD        = 8   (per-texel: checker pick)
+//
+// Not here (external SDK rails or deferred):
+//   OUTMODE_SR_WEAVE            = 9   (SR SDK via D3D11 interop)
+//   OUTMODE_ZONDISION           = 13  (ZimoAdapter.dll)
+//   OUTMODE_3DVISION_GLASSES    = 11  (NV3D-Lib via D3D11 interop)
+//   OUTMODE_FULL_SIDE_BY_SIDE   = 2   (needs swapchain-extent swap, session 3)
+//   OUTMODE_FULL_TOP_AND_BOTTOM = 4   (needs swapchain-extent swap, session 3)
+//   OUTMODE_KATANGA             = 12  (shared DX11 texture)
+//   OUTMODE_STEREO_MIRROR       = 10  (secondary swapchain)
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(push_constant) uniform Params {
     uint  mode;          // OUTMODE_* id
     uint  swapEyes;      // 0 or 1
-    uint  stereoOn;      // 0 (left only) or 1 (full stereo)
-    int   edgeCropPx;    // Half-SBS crop, signed by convergence
+    uint  stereoOn;      // 0 (left-only: right pulled from left) or 1 (full stereo)
+    int   edgeCropPx;    // Half-SBS crop in pixels, lastSep picks which edge
     float lastSep;       // sign picks the crop edge
     uint  pad0;
     uvec2 dstSize;       // destination extent in pixels
@@ -21,12 +35,115 @@ layout(set = 0, binding = 0) uniform sampler2D srcLeft;
 layout(set = 0, binding = 1) uniform sampler2D srcRight;
 layout(set = 0, binding = 2, rgba8) uniform writeonly image2D dst;
 
+// Dubois red-cyan anaglyph: better colour fidelity than naive R-from-L, GB-from-R.
+// Matrix from Dubois 2000 (sRGB space approximation; Vulkan swapchain is sRGB in colour terms here).
+vec3 duboisRC(vec3 L, vec3 R)
+{
+    vec3 r = vec3( 0.456, 0.500, 0.176) * L.r + vec3( 0.500, 0.500, 0.000) * L.g + vec3( 0.176, 0.000, 0.000) * L.b;
+    vec3 c = vec3(-0.040,-0.038,-0.016) * R.r + vec3(-0.038, 0.000, 0.000) * R.g + vec3(-0.016, 0.000, 1.226) * R.b;
+    return clamp(r + c, 0.0, 1.0);
+}
+
+// Sample srcLeft/srcRight with the Half-SBS source-rect crop applied.
+// The crop clips one edge of the source so the band the right-eye shift uncovered
+// (stale sibling bytes on the uncovered edge) is not sampled. Matches the fragment
+// composite's srcOffsets math in Composite.cpp.
+vec4 sampleHalfSbs(bool right, vec2 uv)
+{
+    // uv is in the destination-half space (0..1 across the eye's half).
+    // Map to source-image space, dropping edgeCropPx on the lastSep-chosen edge.
+    float srcW = float(u.dstSize.x);
+    float crop = float(u.edgeCropPx);
+    float lo, hi;
+    if (u.lastSep < 0.0) { lo = 0.0;  hi = srcW - crop; }
+    else                 { lo = crop; hi = srcW;        }
+    float srcX = (lo + uv.x * (hi - lo)) / srcW;
+    vec2 src = vec2(srcX, uv.y);
+    return right ? texture(srcRight, src) : texture(srcLeft, src);
+}
+
+vec4 sampleHalfTab(bool right, vec2 uv)
+{
+    // Same idea on the vertical axis; crop-on-one-edge only applies to SBS, so TAB keeps the full source rect.
+    return right ? texture(srcRight, uv) : texture(srcLeft, uv);
+}
+
 void main()
 {
     uvec2 px = gl_GlobalInvocationID.xy;
     if (px.x >= u.dstSize.x || px.y >= u.dstSize.y) return;
 
-    // Scaffold: write transparent black. Session 2 replaces with a switch
-    // over u.mode covering every OUTMODE_* id the compute rail owns.
-    imageStore(dst, ivec2(px), vec4(0.0, 0.0, 0.0, 1.0));
+    vec4 result = vec4(0.0, 0.0, 0.0, 1.0);
+
+    switch (u.mode)
+    {
+    case 1u: // OUTMODE_HALF_SIDE_BY_SIDE
+    {
+        uint half_ = u.dstSize.x >> 1u;
+        bool right = px.x >= half_;
+        uint lx = right ? (px.x - half_) : px.x;
+        vec2 uv = vec2((float(lx) + 0.5) / float(half_), (float(px.y) + 0.5) / float(u.dstSize.y));
+        bool pickRight = (u.swapEyes != 0u) ? !right : right;
+        if (u.stereoOn == 0u) pickRight = false;   // left-only: both halves from left
+        result = sampleHalfSbs(pickRight, uv);
+        break;
+    }
+
+    case 3u: // OUTMODE_HALF_TOP_AND_BOTTOM
+    {
+        uint half_ = u.dstSize.y >> 1u;
+        bool bottom = px.y >= half_;
+        uint ly = bottom ? (px.y - half_) : px.y;
+        vec2 uv = vec2((float(px.x) + 0.5) / float(u.dstSize.x), (float(ly) + 0.5) / float(half_));
+        bool pickRight = (u.swapEyes != 0u) ? !bottom : bottom;
+        if (u.stereoOn == 0u) pickRight = false;
+        result = sampleHalfTab(pickRight, uv);
+        break;
+    }
+
+    case 5u: // OUTMODE_ANAGLYPH (Dubois red/cyan)
+    {
+        vec4 L = texelFetch(srcLeft,  ivec2(px), 0);
+        vec4 R = u.stereoOn != 0u ? texelFetch(srcRight, ivec2(px), 0) : L;
+        if (u.swapEyes != 0u) { vec4 t = L; L = R; R = t; }
+        result = vec4(duboisRC(L.rgb, R.rgb), 1.0);
+        break;
+    }
+
+    case 6u: // OUTMODE_ROW_INTERLEAVED (even scanlines = left, odd = right)
+    {
+        bool oddRow = (px.y & 1u) == 1u;
+        bool pickRight = (u.swapEyes != 0u) ? !oddRow : oddRow;
+        if (u.stereoOn == 0u) pickRight = false;
+        result = pickRight ? texelFetch(srcRight, ivec2(px), 0) : texelFetch(srcLeft, ivec2(px), 0);
+        break;
+    }
+
+    case 7u: // OUTMODE_COLUMN_INTERLEAVED (even columns = left, odd = right)
+    {
+        bool oddCol = (px.x & 1u) == 1u;
+        bool pickRight = (u.swapEyes != 0u) ? !oddCol : oddCol;
+        if (u.stereoOn == 0u) pickRight = false;
+        result = pickRight ? texelFetch(srcRight, ivec2(px), 0) : texelFetch(srcLeft, ivec2(px), 0);
+        break;
+    }
+
+    case 8u: // OUTMODE_CHECKERBOARD (DLP-Link: (x+y) & 1)
+    {
+        bool oddChk = ((px.x + px.y) & 1u) == 1u;
+        bool pickRight = (u.swapEyes != 0u) ? !oddChk : oddChk;
+        if (u.stereoOn == 0u) pickRight = false;
+        result = pickRight ? texelFetch(srcRight, ivec2(px), 0) : texelFetch(srcLeft, ivec2(px), 0);
+        break;
+    }
+
+    default:
+        // Modes the compute rail does not own: writes transparent black. Caller
+        // falls back to the fragment path on dispatch false, so this is only
+        // reached if a mode slipped through the C++ gate.
+        result = vec4(0.0, 0.0, 0.0, 1.0);
+        break;
+    }
+
+    imageStore(dst, ivec2(px), result);
 }

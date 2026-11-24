@@ -328,23 +328,41 @@ void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std:
         d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, mid);
         ScreenshotCopy(d, cb, sc.scratch, gInfo.Input.StereoActive ? sib : VK_NULL_HANDLE, sc.ci.imageFormat, (uint32_t)w, (uint32_t)h, FgOn());
 
-        // Stereo toggle presents the left eye to both sides; SwapEyes crosses them.
-        VkImage left = sc.scratch, right = gInfo.Input.StereoActive ? sib : sc.scratch;
-        if (gInfo.Input.SwapEyes && gInfo.Input.StereoActive) { VkImage t = left; left = right; right = t; }
-        VkImageBlit blit = {};
-        blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-        blit.dstSubresource = blit.srcSubresource;
-        // Same source rect for both eyes: drop the band the shift uncovered in the right eye, which is otherwise stale
-        // sibling bytes. Its left edge, or its right edge under a negative convergence.
-        const int32_t crop = EdgeCropPx(d->lastSep, w, Vk().VKEdgeCrop);
-        blit.srcOffsets[0] = { d->lastSep < 0.f ? 0 : crop, 0, 0 };
-        blit.srcOffsets[1] = { d->lastSep < 0.f ? w - crop : w, h, 1 };
-        blit.dstOffsets[0] = { 0, 0, 0 };
-        blit.dstOffsets[1] = { w / 2, h, 1 };
-        d->CmdBlitImage(cb, left, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
-        blit.dstOffsets[0] = { w / 2, 0, 0 };
-        blit.dstOffsets[1] = { w, h, 1 };
-        d->CmdBlitImage(cb, right, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+        // Stereo toggle presents the left eye to both sides; the compute rail's shader handles SwapEyes
+        // via a push constant, but the fragment fallback swaps at the C++ level.
+        VkImage leftSrc  = sc.scratch;
+        VkImage rightSrc = gInfo.Input.StereoActive ? sib : sc.scratch;
+
+        // Compute rail: TAB, Anaglyph, Row/Column Interleaved, Checkerboard. The dispatch samples
+        // leftSrc/rightSrc (both in TRANSFER_SRC_OPTIMAL) and blits the composed image into `img`
+        // (TRANSFER_DST_OPTIMAL). Returns false to fall through to the Half-SBS fragment path below
+        // (which also stays the path for mode 1 and for compute init failure).
+        const uint32_t outMode = (uint32_t)gInfo.OutputMode;
+        const bool computeRailMode = (outMode == 3u || outMode == 5u || outMode == 6u || outMode == 7u || outMode == 8u);
+        if (computeRailMode && CompositeComputeDispatch(d, cb, img, leftSrc, rightSrc,
+                                                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, (uint32_t)w, (uint32_t)h, outMode))
+        {
+            // Compute handled it; OSD runs below as usual.
+        }
+        else
+        {
+            VkImage left = leftSrc, right = rightSrc;
+            if (gInfo.Input.SwapEyes && gInfo.Input.StereoActive) { VkImage t = left; left = right; right = t; }
+            VkImageBlit blit = {};
+            blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+            blit.dstSubresource = blit.srcSubresource;
+            // Same source rect for both eyes: drop the band the shift uncovered in the right eye, which is otherwise stale
+            // sibling bytes. Its left edge, or its right edge under a negative convergence.
+            const int32_t crop = EdgeCropPx(d->lastSep, w, Vk().VKEdgeCrop);
+            blit.srcOffsets[0] = { d->lastSep < 0.f ? 0 : crop, 0, 0 };
+            blit.srcOffsets[1] = { d->lastSep < 0.f ? w - crop : w, h, 1 };
+            blit.dstOffsets[0] = { 0, 0, 0 };
+            blit.dstOffsets[1] = { w / 2, h, 1 };
+            d->CmdBlitImage(cb, left, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+            blit.dstOffsets[0] = { w / 2, 0, 0 };
+            blit.dstOffsets[1] = { w, h, 1 };
+            d->CmdBlitImage(cb, right, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+        }
         OsdDraw(d, cb, img, sc.ci.imageFormat, (uint32_t)w, (uint32_t)h);
 
         VkImageMemoryBarrier post[2] = {

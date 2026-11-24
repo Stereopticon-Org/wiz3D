@@ -594,11 +594,21 @@ static VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
     if (d->stereoEnabled) TilesInit(d);
     if (d->stereoEnabled) FgInit(d);
     if (d->stereoEnabled) InstallNgxWatcherVK();
-    // The layer presents the SR weave or half side-by-side: any other OutputMode gets side-by-side, named in this row.
-    if (d->stereoEnabled && !WeaveSelected() && gInfo.OutputMode != OUTMODE_HALF_SIDE_BY_SIDE)
+    // The compute rail (CompositeCompute.cpp) handles modes 3, 5, 6, 7, 8 (Half-TAB, Anaglyph,
+    // Row/Column Interleaved, Checker) alongside the fragment-shader Half-SBS. SR Weave stays its own
+    // rail. Modes 2 (Full-SBS), 4 (Full-TAB), 10 (Mirror), 11 (3D Vision), 12 (Katanga), 13 (Zondision)
+    // are not yet wired on Vulkan; they fall back to Half-SBS and are named in this row.
+    if (d->stereoEnabled && !WeaveSelected())
     {
-        const char* mode = OutputModeToCanonical((int)gInfo.OutputMode);
-        Log("OutputMode %d (%s) is not one the Vulkan layer presents: half side-by-side is used\n", (int)gInfo.OutputMode, mode ? mode : "unknown");
+        const uint32_t m = (uint32_t)gInfo.OutputMode;
+        const bool computeRail = (m == 3u || m == 5u || m == 6u || m == 7u || m == 8u);
+        const bool halfSbs     = (m == (uint32_t)OUTMODE_HALF_SIDE_BY_SIDE);
+        if (!computeRail && !halfSbs)
+        {
+            const char* mode = OutputModeToCanonical((int)gInfo.OutputMode);
+            Log("OutputMode %d (%s) is not yet wired on the Vulkan layer: half side-by-side is used\n",
+                (int)gInfo.OutputMode, mode ? mode : "unknown");
+        }
     }
     if (d->stereoEnabled)
         Log("Stereo ENABLED, DetectInverseMatrix=%d\n", (int)gInfo.DetectInverseMatrix);
