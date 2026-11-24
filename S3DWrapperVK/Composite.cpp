@@ -141,7 +141,7 @@ static bool EnsureCompositeResources(DeviceData* d, SwapchainInfo& sc, uint32_t 
         if (d->AllocateCommandBuffers(d->device, &ai, sc.cmds.data()) != VK_SUCCESS) { sc.cmds.clear(); return false; }
         StampCommandBuffers(d, sc.cmds.data(), ai.commandBufferCount);
         Log("Composite: presents moved to queue family %u (%s)\n", family,
-            FamilyHasGraphics(d, family) ? "graphics" : "no graphics: the eyes are copied, the OSD is left out");
+            FamilyHasGraphics(d, family) ? "graphics" : "no graphics: the left eye is copied + compute OSD");
         return true;
     }
     sc.pool = pool;
@@ -221,7 +221,10 @@ static void PresentOsdOnly(DeviceData* d, SwapchainInfo& sc, VkQueue queue, uint
     ScreenshotCopy(d, cb, img, VK_NULL_HANDLE, sc.ci.imageFormat, sc.ci.imageExtent.width, sc.ci.imageExtent.height, FgOn());
     b = ImageBarrier(img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
     d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
-    if (FamilyHasGraphics(d, family)) OsdDraw(d, cb, img, sc.ci.imageFormat, sc.ci.imageExtent.width, sc.ci.imageExtent.height);
+    if (FamilyHasGraphics(d, family))
+        OsdDraw(d, cb, img, sc.ci.imageFormat, sc.ci.imageExtent.width, sc.ci.imageExtent.height);
+    else
+        OsdDrawCompute(d, cb, img, sc.ci.imageFormat, sc.ci.imageExtent.width, sc.ci.imageExtent.height);
     b = ImageBarrier(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0);
     d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
     d->EndCommandBuffer(cb);

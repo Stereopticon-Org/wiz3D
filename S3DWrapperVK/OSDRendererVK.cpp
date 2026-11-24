@@ -22,6 +22,20 @@ namespace {
 // osd.vert and osd.frag, compiled by glslangValidator -V --target-env vulkan1.0 --vn <name>.
 #include "OsdVert.inc"
 #include "OsdFrag.inc"
+// osd_compute.comp: alpha-blend compute path for compute-only present queues (Wolf II etc.).
+#include "OsdCompute.inc"
+
+constexpr uint32_t kOsdComputeSetRing = 32;   // enough for ~10 frames in flight x 3 slots
+
+// Keep in sync with osd_compute.comp's push_constant block.
+struct OsdComputePush
+{
+    int32_t originX, originY;   // slot top-left on dst, in pixels
+    int32_t slotW,   slotH;     // slot image extent
+    int32_t dstW,    dstH;      // destination extent
+    int32_t pad0,    pad1;
+};
+static_assert(sizeof(OsdComputePush) <= 128, "OSD push constant block must fit the Vulkan 128-byte guaranteed minimum");
 
 enum { kStatus, kFps, kHelp, kSlotCount };
 
@@ -59,6 +73,23 @@ struct OsdState
     VkShaderModule        vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
     std::unordered_map<int, OsdPass> passes;          // by the presented image's format; a null pass failed
     std::unordered_map<VkImage, OsdTarget> targets;   // by presented image
+    // Compute OSD path (compute-only queue families). Parallel to the graphics pipeline above;
+    // reuses `sampler` and the per-slot `OsdSlot` images. Lazy-init on first OsdDrawCompute call.
+    bool                  cReady = false, cFailed = false;
+    VkShaderModule        cs = VK_NULL_HANDLE;
+    VkDescriptorSetLayout cSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout      cPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline            cPipeline = VK_NULL_HANDLE;
+    VkDescriptorPool      cPool = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> cSets;
+    uint32_t              cNextSet = 0;
+    // Scratch image that compute writes the alpha-blended output to, then copies to the swapchain
+    // image (avoids needing STORAGE_BIT on the swapchain image, which some present engines refuse).
+    uint32_t              scratchW = 0, scratchH = 0;
+    VkFormat              scratchFormat = VK_FORMAT_UNDEFINED;
+    VkImage               scratchImg = VK_NULL_HANDLE;
+    VkImageView           scratchView = VK_NULL_HANDLE;
+    VkDeviceMemory        scratchMem = VK_NULL_HANDLE;
     // FPS: presents counted over 250 ms windows, smoothed.
     ULONGLONG lastFpsSample = 0;
     unsigned  framesSinceSample = 0;
@@ -252,7 +283,10 @@ void SlotUpload(DeviceData* d, VkCommandBuffer cb, OsdSlot& s)
     b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    // Covers both the fragment OSD path and the compute OSD path (OsdDrawCompute).
+    d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          0, 0, nullptr, 0, nullptr, 1, &b);
 }
 
 // Fonts, the three slots at DX11's sizes, and everything the pipelines share.
@@ -505,6 +539,157 @@ void DrawQuad(DeviceData* d, OsdState* o, VkCommandBuffer cb, const OsdSlot& s, 
     d->CmdDraw(cb, 4, 1, 0, 0);
 }
 
+// Compute OSD: alpha-blend text slots over the presented image on queues without graphics.
+// Init() runs first (shared sampler + slots). This is strictly additive -- the fragment path is unchanged.
+bool InitCompute(DeviceData* d, OsdState* o)
+{
+    if (o->cReady)  return true;
+    if (o->cFailed) return false;
+    if (!o->ready)  return false;    // Init() must have run (sampler, slots)
+
+    VkDescriptorSetLayoutBinding bindings[2] = {};
+    bindings[0] = { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+    bindings[1] = { 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+    VkDescriptorSetLayoutCreateInfo slci = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+    slci.bindingCount = 2;
+    slci.pBindings = bindings;
+    if (d->CreateDescriptorSetLayout(d->device, &slci, nullptr, &o->cSetLayout) != VK_SUCCESS) return false;
+
+    VkPushConstantRange pcr = { VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(OsdComputePush) };
+    VkPipelineLayoutCreateInfo plci = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+    plci.setLayoutCount = 1;
+    plci.pSetLayouts = &o->cSetLayout;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges = &pcr;
+    if (d->CreatePipelineLayout(d->device, &plci, nullptr, &o->cPipelineLayout) != VK_SUCCESS) return false;
+
+    VkShaderModuleCreateInfo smci = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
+    smci.codeSize = sizeof(kOsdComputeSpv);
+    smci.pCode = kOsdComputeSpv;
+    if (d->CreateShaderModule(d->device, &smci, nullptr, &o->cs) != VK_SUCCESS) return false;
+
+    VkComputePipelineCreateInfo cpci = { VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+    cpci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    cpci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    cpci.stage.module = o->cs;
+    cpci.stage.pName = "main";
+    cpci.layout = o->cPipelineLayout;
+    if (d->CreateComputePipelines(d->device, VK_NULL_HANDLE, 1, &cpci, nullptr, &o->cPipeline) != VK_SUCCESS) return false;
+
+    VkDescriptorPoolSize poolSizes[2] = {};
+    poolSizes[0] = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kOsdComputeSetRing };
+    poolSizes[1] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          kOsdComputeSetRing };
+    VkDescriptorPoolCreateInfo dpci = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+    dpci.maxSets = kOsdComputeSetRing;
+    dpci.poolSizeCount = 2;
+    dpci.pPoolSizes = poolSizes;
+    if (d->CreateDescriptorPool(d->device, &dpci, nullptr, &o->cPool) != VK_SUCCESS) return false;
+
+    std::vector<VkDescriptorSetLayout> layouts(kOsdComputeSetRing, o->cSetLayout);
+    o->cSets.resize(kOsdComputeSetRing);
+    VkDescriptorSetAllocateInfo dsai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+    dsai.descriptorPool = o->cPool;
+    dsai.descriptorSetCount = kOsdComputeSetRing;
+    dsai.pSetLayouts = layouts.data();
+    if (d->AllocateDescriptorSets(d->device, &dsai, o->cSets.data()) != VK_SUCCESS) return false;
+
+    o->cReady = true;
+    return true;
+}
+
+bool EnsureComputeScratch(DeviceData* d, OsdState* o, uint32_t w, uint32_t h, VkFormat fmt)
+{
+    if (o->scratchW == w && o->scratchH == h && o->scratchFormat == fmt && o->scratchImg) return true;
+
+    if (o->scratchView) { d->DestroyImageView(d->device, o->scratchView, nullptr); o->scratchView = VK_NULL_HANDLE; }
+    if (o->scratchImg)  { d->DestroyImage(d->device, o->scratchImg, nullptr);       o->scratchImg  = VK_NULL_HANDLE; }
+    if (o->scratchMem)  { d->FreeMemory(d->device, o->scratchMem, nullptr);         o->scratchMem  = VK_NULL_HANDLE; }
+
+    VkImageCreateInfo ci = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+    ci.imageType = VK_IMAGE_TYPE_2D;
+    ci.format = fmt;
+    ci.extent = { w, h, 1 };
+    ci.mipLevels = 1;
+    ci.arrayLayers = 1;
+    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ci.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (d->CreateImage(d->device, &ci, nullptr, &o->scratchImg) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements req = {};
+    d->GetImageMemoryRequirements(d->device, o->scratchImg, &req);
+    VkPhysicalDeviceMemoryProperties mp = {};
+    d->inst->GetPhysicalDeviceMemoryProperties(d->physDev, &mp);
+    uint32_t mtype = UINT32_MAX;
+    for (uint32_t i = 0; i < mp.memoryTypeCount; ++i)
+        if ((req.memoryTypeBits & (1u << i)) && (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) { mtype = i; break; }
+    if (mtype == UINT32_MAX) return false;
+    VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = mtype;
+    if (d->AllocateMemory(d->device, &mai, nullptr, &o->scratchMem) != VK_SUCCESS) return false;
+    if (d->BindImageMemory(d->device, o->scratchImg, o->scratchMem, 0) != VK_SUCCESS) return false;
+
+    VkImageViewCreateInfo vci = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+    vci.image = o->scratchImg;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = fmt;
+    vci.components = { VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY };
+    vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    if (d->CreateImageView(d->device, &vci, nullptr, &o->scratchView) != VK_SUCCESS) return false;
+
+    o->scratchW = w; o->scratchH = h; o->scratchFormat = fmt;
+    return true;
+}
+
+void DispatchSlotCompute(DeviceData* d, OsdState* o, VkCommandBuffer cb, const OsdSlot& s,
+                         int32_t x, int32_t y, int32_t sw, int32_t sh, uint32_t dstW, uint32_t dstH)
+{
+    const uint32_t slot = o->cNextSet;
+    o->cNextSet = (o->cNextSet + 1u) % kOsdComputeSetRing;
+    VkDescriptorSet set = o->cSets[slot];
+
+    VkDescriptorImageInfo slotInfo = { o->sampler, s.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    VkDescriptorImageInfo dstInfo  = { VK_NULL_HANDLE, o->scratchView, VK_IMAGE_LAYOUT_GENERAL };
+
+    VkWriteDescriptorSet writes[2] = {};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = set; writes[0].dstBinding = 0; writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].pImageInfo = &slotInfo;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = set; writes[1].dstBinding = 1; writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[1].pImageInfo = &dstInfo;
+    d->UpdateDescriptorSets(d->device, 2, writes, 0, nullptr);
+
+    d->CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, o->cPipelineLayout, 0, 1, &set, 0, nullptr);
+
+    OsdComputePush push = {};
+    push.originX = x; push.originY = y;
+    push.slotW   = sw; push.slotH  = sh;
+    push.dstW    = (int32_t)dstW; push.dstH = (int32_t)dstH;
+    d->CmdPushConstants(cb, o->cPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+
+    const uint32_t gx = ((uint32_t)sw + 7u) / 8u;
+    const uint32_t gy = ((uint32_t)sh + 7u) / 8u;
+    d->CmdDispatch(cb, gx, gy, 1);
+
+    // RAW on scratchImg between dispatches (each slot reads + writes).
+    VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = o->scratchImg;
+    b.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          0, 0, nullptr, 0, nullptr, 1, &b);
+}
+
 } // namespace
 
 // Once per present: the FPS average, and the two-second status strip when a stereo setting changed since the last.
@@ -612,6 +797,125 @@ void OsdDraw(DeviceData* d, VkCommandBuffer cb, VkImage dst, VkFormat format, ui
     d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
 }
 
+// Lock held. dst is the presented image, w x h, in TRANSFER_DST_OPTIMAL before and after.
+// Used on queue families without graphics (compute-only present on Wolfenstein II etc.).
+// Mirrors OsdDraw's slot placement but goes through a compute pipeline + scratch image to
+// avoid needing a render pass (impossible on compute-only queues).
+void OsdDrawCompute(DeviceData* d, VkCommandBuffer cb, VkImage dst, VkFormat format, uint32_t w, uint32_t h)
+{
+    OsdState* o = d->osd;
+    if (!o || o->failed || !w || !h) return;
+    const bool wantStatus = WantStatus(o), wantFps = gInfo.Input.ShowFPS != 0, wantHelp = gInfo.Input.ShowHotKeyOSD != 0;
+    if (!wantStatus && !wantFps && !wantHelp) return;
+    if (!o->ready)
+    {
+        if (!Init(d, o)) { o->failed = true; Log("OSD: setup failed: no on-screen display in this session\n"); return; }
+        o->ready = true;
+        Log("OSD: status strip, FPS counter and hotkey list over the presented image\n");
+    }
+    if (!o->cReady && !o->cFailed)
+    {
+        if (!InitCompute(d, o)) { o->cFailed = true; Log("OSD compute: setup failed: no OSD on compute-only queues\n"); return; }
+        Log("OSD compute: ready for compute-only present queues\n");
+    }
+    if (o->cFailed) return;
+    if (!EnsureComputeScratch(d, o, w, h, format)) return;
+
+    UpdateSlots(o, wantStatus, wantFps, wantHelp);
+    if (wantStatus) SlotUpload(d, cb, o->slots[kStatus]);
+    if (wantFps)    SlotUpload(d, cb, o->slots[kFps]);
+    if (wantHelp)   SlotUpload(d, cb, o->slots[kHelp]);
+
+    // dst TRANSFER_DST -> TRANSFER_SRC, scratch UNDEFINED -> TRANSFER_DST
+    VkImageMemoryBarrier pre1[2] = {};
+    pre1[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    pre1[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    pre1[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    pre1[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    pre1[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    pre1[0].srcQueueFamilyIndex = pre1[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    pre1[0].image = dst;
+    pre1[0].subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    pre1[1] = pre1[0];
+    pre1[1].srcAccessMask = 0;
+    pre1[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    pre1[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    pre1[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    pre1[1].image = o->scratchImg;
+    d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, pre1);
+
+    VkImageCopy copyIn = {};
+    copyIn.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    copyIn.dstSubresource = copyIn.srcSubresource;
+    copyIn.extent = { w, h, 1 };
+    d->CmdCopyImage(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, o->scratchImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyIn);
+
+    // scratch TRANSFER_DST -> GENERAL for compute read+write
+    VkImageMemoryBarrier pre2 = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    pre2.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    pre2.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    pre2.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    pre2.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    pre2.srcQueueFamilyIndex = pre2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    pre2.image = o->scratchImg;
+    pre2.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &pre2);
+
+    d->CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, o->cPipeline);
+
+    // Same placement rules as the fragment OsdDraw.
+    float barX = 0.f, letterboxY = 0.f;
+    if (gInfo.Input.StereoActive && gInfo.FrustumAdjustMode)
+        barX = gInfo.BlackAreaWidth * (float)w * (gInfo.SeparationMode == 1 ? 2.f : 1.f);
+    if (gInfo.FixNone16x9TextPosition)
+        letterboxY = (std::max)(0.f, ((float)h - (float)w / (16.f / 9.f)) * 0.5f);
+
+    if (wantHelp)
+    {
+        const OsdSlot& s = o->slots[kHelp];
+        const int32_t dw = (int32_t)(std::min)(w > 40u ? w - 40u : (uint32_t)s.w, (uint32_t)s.w);
+        const int32_t dh = (int32_t)(std::min)(h > 40u ? h - 40u : (uint32_t)s.h, (uint32_t)s.h);
+        DispatchSlotCompute(d, o, cb, s, ((int32_t)w - dw) / 2, ((int32_t)h - dh) / 2, dw, dh, w, h);
+    }
+    if (wantStatus)
+    {
+        const OsdSlot& s = o->slots[kStatus];
+        DispatchSlotCompute(d, o, cb, s, 20 + (int32_t)barX, 20 + (int32_t)letterboxY, s.w, s.h, w, h);
+    }
+    if (wantFps)
+    {
+        const OsdSlot& s = o->slots[kFps];
+        DispatchSlotCompute(d, o, cb, s, (int32_t)w - 20 - (int32_t)barX - s.w, 20 + (int32_t)letterboxY, s.w, s.h, w, h);
+    }
+
+    // scratch GENERAL -> TRANSFER_SRC, dst TRANSFER_SRC -> TRANSFER_DST
+    VkImageMemoryBarrier post[2] = {};
+    post[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    post[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    post[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    post[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    post[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    post[0].srcQueueFamilyIndex = post[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    post[0].image = o->scratchImg;
+    post[0].subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    post[1] = post[0];
+    post[1].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    post[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    post[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    post[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    post[1].image = dst;
+    d->CmdPipelineBarrier(cb,
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          0, 0, nullptr, 0, nullptr, 2, post);
+
+    VkImageCopy copyOut = {};
+    copyOut.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    copyOut.dstSubresource = copyOut.srcSubresource;
+    copyOut.extent = { w, h, 1 };
+    d->CmdCopyImage(cb, o->scratchImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyOut);
+}
+
 // Lock held, the swapchain's work finished: its images' framebuffers go with it.
 void OsdDestroySwapchain(DeviceData* d, SwapchainInfo& sc)
 {
@@ -630,6 +934,15 @@ void OsdDestroyDevice(DeviceData* d)
 {
     OsdState* o = d->osd;
     if (!o) return;
+    // Compute path first (independent of the graphics render-pass teardown below).
+    if (o->scratchView) d->DestroyImageView(d->device, o->scratchView, nullptr);
+    if (o->scratchImg)  d->DestroyImage(d->device, o->scratchImg, nullptr);
+    if (o->scratchMem)  d->FreeMemory(d->device, o->scratchMem, nullptr);
+    if (o->cPipeline)       d->DestroyPipeline(d->device, o->cPipeline, nullptr);
+    if (o->cPipelineLayout) d->DestroyPipelineLayout(d->device, o->cPipelineLayout, nullptr);
+    if (o->cSetLayout)      d->DestroyDescriptorSetLayout(d->device, o->cSetLayout, nullptr);
+    if (o->cPool)           d->DestroyDescriptorPool(d->device, o->cPool, nullptr);
+    if (o->cs)              d->DestroyShaderModule(d->device, o->cs, nullptr);
     for (auto& kv : o->targets) TargetDestroy(d, kv.second);
     for (auto& kv : o->passes)
     {

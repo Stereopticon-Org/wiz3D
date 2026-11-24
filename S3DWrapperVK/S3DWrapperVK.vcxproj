@@ -130,9 +130,11 @@
     <None Include="VK_LAYER_wiz3D_stereo.json" />
     <None Include="osd.vert" />
     <None Include="osd.frag" />
+    <None Include="osd_compute.comp" />
     <None Include="composite.comp" />
     <None Include="OsdVert.inc" />
     <None Include="OsdFrag.inc" />
+    <None Include="OsdCompute.inc" />
     <None Include="CompositeComp.inc" />
     <None Include="README.md" />
   </ItemGroup>

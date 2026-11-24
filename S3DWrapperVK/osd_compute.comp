@@ -1,0 +1,37 @@
+#version 450
+// Compute path for the OSD on queues that cannot draw (compute-only families, e.g.
+// Wolfenstein II's present queue). One dispatch per visible slot; each work-item
+// alpha-blends one slot pixel over the destination.
+//
+// Equivalent of the fragment-shader OSD's blend:
+//   srcColor: glyph.rgb   srcAlpha: glyph.a
+//   dstColor: SRC_ALPHA   dstBlend: ONE_MINUS_SRC_ALPHA
+//   -> out.rgb = glyph.rgb * glyph.a + dst.rgb * (1 - glyph.a) = mix(dst, glyph, glyph.a)
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant) uniform Params {
+    ivec2 origin;       // top-left of the slot on dst, in pixels
+    ivec2 slotSize;     // slot image extent, in pixels
+    ivec2 dstSize;      // destination extent, in pixels
+    int   pad0;
+    int   pad1;
+} u;
+
+layout(set = 0, binding = 0) uniform sampler2D slot;        // GDI bitmap in SHADER_READ_ONLY_OPTIMAL
+layout(set = 0, binding = 1, rgba8) uniform image2D dst;    // osdScratch in GENERAL
+
+void main()
+{
+    ivec2 lp = ivec2(gl_GlobalInvocationID.xy);
+    if (lp.x >= u.slotSize.x || lp.y >= u.slotSize.y) return;
+    ivec2 dp = u.origin + lp;
+    if (dp.x < 0 || dp.y < 0 || dp.x >= u.dstSize.x || dp.y >= u.dstSize.y) return;
+
+    vec2 uv = (vec2(lp) + 0.5) / vec2(u.slotSize);
+    vec4 g = texture(slot, uv);
+    if (g.a <= 0.001) return;                 // skip fully transparent texels (most of the GDI bitmap)
+    vec4 prev = imageLoad(dst, dp);
+    vec3 outRgb = mix(prev.rgb, g.rgb, g.a);
+    imageStore(dst, dp, vec4(outRgb, 1.0));
+}

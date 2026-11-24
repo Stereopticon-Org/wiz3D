@@ -1021,6 +1021,8 @@ void OsdTick(DeviceData* d);                // once per present
 bool OsdWanted(DeviceData* d);              // an element is showing
 // dst is w x h and in TRANSFER_DST_OPTIMAL before and after.
 void OsdDraw(DeviceData* d, VkCommandBuffer cb, VkImage dst, VkFormat format, uint32_t w, uint32_t h);
+// Compute OSD -- same contract as OsdDraw but works on queues without graphics (Wolf II compute-only present).
+void OsdDrawCompute(DeviceData* d, VkCommandBuffer cb, VkImage dst, VkFormat format, uint32_t w, uint32_t h);
 void OsdDestroySwapchain(DeviceData* d, SwapchainInfo& sc);
 void OsdDestroyDevice(DeviceData* d);
 
