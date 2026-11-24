@@ -339,12 +339,14 @@ void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std:
         VkImage leftSrc  = sc.scratch;
         VkImage rightSrc = gInfo.Input.StereoActive ? sib : sc.scratch;
 
-        // Compute rail: TAB, Anaglyph, Row/Column Interleaved, Checkerboard. The dispatch samples
-        // leftSrc/rightSrc (both in TRANSFER_SRC_OPTIMAL) and blits the composed image into `img`
-        // (TRANSFER_DST_OPTIMAL). Returns false to fall through to the Half-SBS fragment path below
-        // (which also stays the path for mode 1 and for compute init failure).
+        // Compute rail: Full-SBS, Half/Full-TAB, Anaglyph, Row/Column Interleaved, Checkerboard.
+        // Half-SBS (1) and Zondision (13, which rides Half-SBS) stay on the fragment-shader blit
+        // path below for zero-regression on the common case. Full-SBS (2) and Full-TAB (4) use
+        // the same pixel math as their Half counterparts -- the "Full" is a game-side resolution
+        // choice (user picks a half-width or half-height mode in-game), not a wrapper concern.
         const uint32_t outMode = (uint32_t)gInfo.OutputMode;
-        const bool computeRailMode = (outMode == 3u || outMode == 5u || outMode == 6u || outMode == 7u || outMode == 8u);
+        const bool computeRailMode = (outMode == 2u || outMode == 3u || outMode == 4u ||
+                                      outMode == 5u || outMode == 6u || outMode == 7u || outMode == 8u);
         if (computeRailMode && CompositeComputeDispatch(d, cb, img, leftSrc, rightSrc,
                                                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, (uint32_t)w, (uint32_t)h, outMode))
         {

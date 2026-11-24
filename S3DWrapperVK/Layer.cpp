@@ -594,16 +594,18 @@ static VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateDevice(
     if (d->stereoEnabled) TilesInit(d);
     if (d->stereoEnabled) FgInit(d);
     if (d->stereoEnabled) InstallNgxWatcherVK();
-    // The compute rail (CompositeCompute.cpp) handles modes 3, 5, 6, 7, 8 (Half-TAB, Anaglyph,
-    // Row/Column Interleaved, Checker) alongside the fragment-shader Half-SBS. SR Weave stays its
-    // own rail (Weave.cpp). OUTMODE_ZONDISION (13) rides the Half-SBS fragment path and drives the
-    // Zondision display's own 3D state through ZimoAdapter.dll (ZondisionVK.cpp). Modes 2 (Full-SBS),
-    // 4 (Full-TAB), 10 (Mirror), 11 (3D Vision), 12 (Katanga) are not yet wired on Vulkan; they fall
-    // back to Half-SBS and are named in this row.
+    // The compute rail (CompositeCompute.cpp) handles modes 2, 3, 4, 5, 6, 7, 8
+    // (Full-SBS, Half/Full-TAB, Anaglyph, Row/Column Interleaved, Checker) alongside the
+    // fragment-shader Half-SBS (1). SR Weave (9) stays its own rail (Weave.cpp).
+    // OUTMODE_ZONDISION (13) rides the Half-SBS fragment path and drives the Zondision
+    // display's own 3D state through ZimoAdapter.dll (ZondisionVK.cpp).
+    // Modes 10 (Mirror), 11 (3D Vision), 12 (Katanga) are not yet wired on Vulkan; they
+    // fall back to Half-SBS and are named in this row. 3D Vision specifically needs an
+    // NV3D-Lib Vulkan interop extension (its own PR).
     if (d->stereoEnabled && !WeaveSelected())
     {
         const uint32_t m = (uint32_t)gInfo.OutputMode;
-        const bool computeRail = (m == 3u || m == 5u || m == 6u || m == 7u || m == 8u);
+        const bool computeRail = (m == 2u || m == 3u || m == 4u || m == 5u || m == 6u || m == 7u || m == 8u);
         const bool halfSbs     = (m == (uint32_t)OUTMODE_HALF_SIDE_BY_SIDE);
         const bool zondision   = (m == (uint32_t)OUTMODE_ZONDISION);
         if (!computeRail && !halfSbs && !zondision)

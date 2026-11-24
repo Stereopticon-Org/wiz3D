@@ -4,18 +4,20 @@
 //
 // Modes handled here (the "compute rail", wiz3D writes final pixels):
 //   OUTMODE_HALF_SIDE_BY_SIDE   = 1   (sampled: each eye squashed to half width)
+//   OUTMODE_FULL_SIDE_BY_SIDE   = 2   (same pixel math as 1: the "Full" is a game-side
+//                                      resolution choice. Pick half-width in-game and the
+//                                      Half-SBS squash becomes a 1:1 copy on the monitor.)
 //   OUTMODE_HALF_TOP_AND_BOTTOM = 3   (sampled: each eye squashed to half height)
+//   OUTMODE_FULL_TOP_AND_BOTTOM = 4   (same pixel math as 3: half-height in-game.)
 //   OUTMODE_ANAGLYPH            = 5   (per-texel: Dubois red/cyan)
 //   OUTMODE_ROW_INTERLEAVED     = 6   (per-texel: even rows L, odd rows R)
 //   OUTMODE_COLUMN_INTERLEAVED  = 7   (per-texel: even cols L, odd cols R)
 //   OUTMODE_CHECKERBOARD        = 8   (per-texel: checker pick)
 //
 // Not here (external SDK rails or deferred):
-//   OUTMODE_SR_WEAVE            = 9   (SR SDK via D3D11 interop)
-//   OUTMODE_ZONDISION           = 13  (ZimoAdapter.dll)
-//   OUTMODE_3DVISION_GLASSES    = 11  (NV3D-Lib via D3D11 interop)
-//   OUTMODE_FULL_SIDE_BY_SIDE   = 2   (needs swapchain-extent swap, session 3)
-//   OUTMODE_FULL_TOP_AND_BOTTOM = 4   (needs swapchain-extent swap, session 3)
+//   OUTMODE_SR_WEAVE            = 9   (SR SDK via D3D11 interop; Weave.cpp)
+//   OUTMODE_ZONDISION           = 13  (ZimoAdapter.dll + Zondision 3DS SDK; ZondisionVK.cpp)
+//   OUTMODE_3DVISION_GLASSES    = 11  (NV3D-Lib via D3D11 interop; needs Vulkan interop extension)
 //   OUTMODE_KATANGA             = 12  (shared DX11 texture)
 //   OUTMODE_STEREO_MIRROR       = 10  (secondary swapchain)
 
@@ -78,6 +80,7 @@ void main()
     switch (u.mode)
     {
     case 1u: // OUTMODE_HALF_SIDE_BY_SIDE
+    case 2u: // OUTMODE_FULL_SIDE_BY_SIDE (identical shader; Full is a game-side resolution choice)
     {
         uint half_ = u.dstSize.x >> 1u;
         bool right = px.x >= half_;
@@ -90,6 +93,7 @@ void main()
     }
 
     case 3u: // OUTMODE_HALF_TOP_AND_BOTTOM
+    case 4u: // OUTMODE_FULL_TOP_AND_BOTTOM (identical shader; Full is a game-side resolution choice)
     {
         uint half_ = u.dstSize.y >> 1u;
         bool bottom = px.y >= half_;
