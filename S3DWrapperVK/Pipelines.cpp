@@ -107,6 +107,7 @@ static VkResult CreateShaderModuleImpl(
     VkDevice device, const VkShaderModuleCreateInfo* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkShaderModule* pShaderModule)
 {
     DeviceData* d = FindDevice(device);
+    if (!d) return VK_ERROR_DEVICE_LOST;
     if (!d->stereoEnabled || !pCreateInfo->pCode || pCreateInfo->codeSize < 20)
         return d->CreateShaderModule(device, pCreateInfo, pAllocator, pShaderModule);
 
@@ -635,6 +636,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateShaderModule(
 static VKAPI_ATTR void VKAPI_CALL Hook_DestroyShaderModule(VkDevice device, VkShaderModule module, const VkAllocationCallbacks* pAllocator)
 {
     DeviceData* d = FindDevice(device);
+    if (!d) return;
     VkShaderModule original = VK_NULL_HANDLE, spriteTwin = VK_NULL_HANDLE, varyTwin = VK_NULL_HANDLE, camTwin = VK_NULL_HANDLE;
     VkShaderModule remapTwin = VK_NULL_HANDLE, rayTwin = VK_NULL_HANDLE, rsxTwin = VK_NULL_HANDLE, veloTwin = VK_NULL_HANDLE, glassTwin = VK_NULL_HANDLE, decalTwin = VK_NULL_HANDLE;
     VkShaderModule tileTwin = VK_NULL_HANDLE;
@@ -668,6 +670,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateGraphicsPipelines(
     const VkAllocationCallbacks* pAllocator, VkPipeline* pPipelines)
 {
     DeviceData* d = FindDevice(device);
+    if (!d) return VK_ERROR_DEVICE_LOST;
     // Only the last position-writing stage shifts: with a tessellation or geometry stage present, the vertex stage
     // reverts to its original module, unless the geometry stage is a passthrough that forwards the VS's Position.
     std::vector<VkGraphicsPipelineCreateInfo> infos(pCreateInfos, pCreateInfos + count);
@@ -922,6 +925,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateComputePipelines(
     const VkAllocationCallbacks* pAllocator, VkPipeline* pPipelines)
 {
     DeviceData* d = FindDevice(device);
+    if (!d) return VK_ERROR_DEVICE_LOST;
     // VKComputeRemap: the twin needs set 8, so only a layout that carries it takes the twin.
     std::vector<VkComputePipelineCreateInfo> infos(pCreateInfos, pCreateInfos + count);
     std::vector<uint8_t> remap(count, 0);
@@ -957,6 +961,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL Hook_CreateComputePipelines(
 static VKAPI_ATTR void VKAPI_CALL Hook_DestroyPipeline(VkDevice device, VkPipeline pipeline, const VkAllocationCallbacks* pAllocator)
 {
     DeviceData* d = FindDevice(device);
+    if (!d) return;
     {
         std::lock_guard<std::shared_mutex> g(d->lock);
         d->pipelines.erase(pipeline);

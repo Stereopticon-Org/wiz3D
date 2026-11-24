@@ -236,7 +236,14 @@ static void PresentOsdOnly(DeviceData* d, SwapchainInfo& sc, VkQueue queue, uint
     si.pSignalSemaphores = &sc.done[idx];
     VkResult r;
     { const auto ql = FgQueueLock(); r = d->QueueSubmit(queue, 1, &si, sc.fences[idx]); }
-    if (r != VK_SUCCESS) { Log("OSD submit failed %d\n", r); return; }
+    if (r != VK_SUCCESS)
+    {
+        Log("OSD submit failed %d\n", r);
+        // The fence was reset before submit but never scheduled; re-signal it with an empty submit so next frame's wait returns.
+        const auto ql = FgQueueLock();
+        d->QueueSubmit(queue, 0, nullptr, sc.fences[idx]);
+        return;
+    }
     outWait.push_back(sc.done[idx]);
     ScreenshotWrite(d, queue);
 }
@@ -358,7 +365,14 @@ void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std:
         si.pSignalSemaphores = &sc.done[idx];
         VkResult r;
         { const auto ql = FgQueueLock(); r = d->QueueSubmit(queue, 1, &si, sc.fences[idx]); }
-        if (r != VK_SUCCESS) { Log("Composite submit failed %d\n", r); return; }
+        if (r != VK_SUCCESS)
+        {
+            Log("Composite submit failed %d\n", r);
+            // The fence was reset before submit but never scheduled; re-signal it with an empty submit so next frame's wait returns.
+            const auto ql = FgQueueLock();
+            d->QueueSubmit(queue, 0, nullptr, sc.fences[idx]);
+            return;
+        }
         outWait.push_back(sc.done[idx]);
         ScreenshotWrite(d, queue);
     }
@@ -367,6 +381,7 @@ void CompositePresent(DeviceData* d, VkQueue queue, VkPresentInfoKHR* info, std:
 static VKAPI_ATTR VkResult VKAPI_CALL Hook_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo)
 {
     DeviceData* d = FindDevice(queue);
+    if (!d) return VK_ERROR_DEVICE_LOST;
     StereoParamsUpdate(d);
     VkPresentInfoKHR info = *pPresentInfo;
     std::vector<VkSemaphore> wait;
